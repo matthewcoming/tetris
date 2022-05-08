@@ -1,3 +1,4 @@
+from email.policy import default
 from enum import Enum
 import random
 from threading import Timer
@@ -8,6 +9,7 @@ DOWN = "DOWN"
 LEFT = "LEFT"
 RIGHT = "RIGHT"
 SPACE = "SPACE"
+
 
 class Block(Enum):
     L = [
@@ -47,77 +49,84 @@ class Block(Enum):
 
 
 class Board:
+    """
+    Notes:
 
+    Code assumes blocks are defined in squares
+    """
     actions = {
-        450: UP,
-        452: LEFT,
-        454: RIGHT,
-        456: DOWN
+        cs.KEY_UP: UP,
+        cs.KEY_DOWN: DOWN,
+        cs.KEY_LEFT: LEFT,
+        cs.KEY_RIGHT: RIGHT,
+        32: SPACE
     }
 
     def __init__(self, width, height):
         self.width = width
         self.height = height
+        # The static items on the board, source of truth
         self.cells: list[list[int]] = [ [False] * width for _ in range(height)]
-        self.upcoming_blocks: list[list[list[int]]] = [Block.random().value for i in range(3)]
+        # copy self.cells but add the current block
+        self.drawing_board: list[list[int]] = [ [False] * width for _ in range(height)]
+        self.upcoming_blocks: list[list[list[int]]] = [Block.random().value for _ in range(3)]
         self.new_move = True
-        self.current_block_location: list[int] = None # location, start top left, right then down, 0 indexed
-        self.current_block: list[tuple[bool]] = None
+        self.block_coord: list[int] = None # location, start top left, right then down, 0 indexed
+        self.current_block: list[list[int]] = None
 
     def print_board(self):
         for row in self.cells:
             print(row)
 
-    def iterate(self, stdscr, action: str = None):
+    def iterate(self, action: str = None):
+        #
+        if (self.current_block
+            and not self.new_move 
+            and not self.check_block([self.block_coord[0],self.block_coord[1]+1], self.current_block)):
+                self.new_move = True
         if self.new_move:
             self.current_block = self.upcoming_blocks.pop(0)
             self.upcoming_blocks.append(Block.random().value)
-            self.current_block_location = [3, 0]
+            self.block_coord = [int((self.width/2) - 2), 0]
             self.new_move = False
-            return True
+            self.draw_block()
 
         elif action == UP:
             # TODO: check shape against position
             test_block = Block.rotate(self.current_block)
-            if self.check_block(self.current_block_location, test_block):
-                self.clear_block(self.current_block_location, self.current_block)
+            if self.check_block(self.block_coord, test_block):
                 self.current_block = test_block
                 self.draw_block()
             else: 
-                x = self.current_block_location[0]
-                y = self.current_block_location[1] - 1
+                x = self.block_coord[0]
+                y = self.block_coord[1] - 1
                 if y < 0:
                     return False
                 if self.check_block((x, y), test_block):
-                    self.current_block_location
-                self.clear_block(self.current_block_location, self.current_block)
+                    self.block_coord
                 self.current_block = test_block
                 self.draw_block()
                 
         elif action == LEFT:
-            if self.current_block_location[0] > 0:
-                self.clear_block(self.current_block_location, self.current_block)
-                self.current_block_location[0] -= 1
+            if self.block_coord[0] > 0:
+                self.block_coord[0] -= 1
                 self.draw_block()
 
         elif action == RIGHT:
-            if self.current_block_location[0] + len(self.current_block) < self.width:
-                self.clear_block(self.current_block_location, self.current_block)
-                self.current_block_location[0] += 1
+            if self.block_coord[0] + len(self.current_block) < self.width:
+                self.block_coord[0] += 1
                 self.draw_block()
 
         elif action == SPACE:
             pass
-        elif action == DOWN:
-            # TODO: go down faster
-            pass
-        else: # push down
-            self.clear_block(self.current_block_location, self.current_block)
-            self.current_block_location[1] += 1        
-            retval = self.draw_block()
-            if not retval:
-                self.new_move = True 
-            return retval
+
+        elif action in [DOWN, None]:
+            self.block_coord[1] += 1        
+            self.draw_block()
+        else:
+            return False
+
+        return True
 
     def check_block(self, corner_xy, block):
         for row_idx, row in enumerate(block):
@@ -125,52 +134,76 @@ class Board:
                 row_num = corner_xy[1] + row_idx
                 col_num = corner_xy[0] + item_idx
                 # bottom check
-                if row_num == self.height:
+                if item and row_num >= self.height:
+                    print("height restriction")
                     return False
                 # left check
                 # right check
                 # overlap check
-                if self.cells[row_num][col_num] and item:
+                if item and self.cells[row_num][col_num]:
+                    print("overlap restriction")
                     return False
+        return True
 
     def draw_block(self):
         for row_idx, row in enumerate(self.current_block):
             for item_idx, item in enumerate(row):
-                row_num = self.current_block_location[1] + row_idx
-                col_num = self.current_block_location[0] + item_idx
-                self.cells[row_num][col_num] = item
-
+                if item:
+                    row_num = self.block_coord[1] + row_idx
+                    col_num = self.block_coord[0] + item_idx
+                    self.cells[row_num][col_num] = item
         return True
 
     def clear_block(self, corner_xy, block):
+        """
+        
+        """
         for row_idx, row in enumerate(block):
-            for item_idx in range(len(row)):
-                row_num = corner_xy[1] + row_idx
-                col_num = corner_xy[0] + item_idx
-                self.cells[row_num][col_num] = 0
+            for item_idx, item in enumerate(row):
+                if item:
+                    row_num = corner_xy[1] + row_idx
+                    col_num = corner_xy[0] + item_idx
+                    self.cells[row_num][col_num] = 0
         
 class Game:
+
+    default_wait_time = 0.8
+
     def __init__(self):
         self.terminating = False
         self.board = Board(10, 20)
-        self.wait_time = 0.8
+        self.spinning_wait_time = Game.default_wait_time
+        self.is_spinning = False
+        self.times_spun = 0
         self.timer = None
-        self.iterations = 0
         self.stdscr: cs._CursesWindow = None
         self.key = None
 
     @staticmethod
-    def run(stdscr, instance: "Game"):
+    def run(stdscr: "cs._CursesWindow", instance: "Game"):
         instance.stdscr = stdscr
         instance.setup()
         instance.loop()
-        while not instance.terminating:
-            instance.key = instance.stdscr.getch()
-            if instance.key in Board.actions:
-                instance.board.iterate(instance.stdscr, Board.actions[instance.key])
-                instance.draw()
-            if instance.key == 3:
-                instance.terminating = True
+        try:
+            while not instance.terminating:
+                instance.key = instance.stdscr.getch()
+                if instance.key in Board.actions:
+                    action = Board.actions[instance.key]
+                    # if rotation, prevent spinning foreverd
+                    if action is not UP:
+                        # call loop manually to reset the wait time
+                        if instance.times_spun >= 20:
+                            instance.is_spinning = False
+                            action = None
+                        else:
+                            instance.is_spinning = True
+                            instance.spinning_wait_time *= 0.95
+                            instance.times_spun +=1
+                    instance.loop(instance.spinning_wait_time, action)
+                elif instance.key == 3:
+                    instance.terminating = True
+        except KeyboardInterrupt:
+            pass
         instance.teardown()
         
     def setup(self):
@@ -183,37 +216,51 @@ class Game:
         cs.init_pair(6, cs.COLOR_BLACK, cs.COLOR_MAGENTA)
         cs.init_pair(7, cs.COLOR_BLACK, cs.COLOR_RED)
         cs.curs_set(0)
-        self.stdscr.keypad(True)
         self.stdscr.clear()
-        self.stdscr.nodelay(True)
+        # self.stdscr.nodelay(True)
 
-    def loop(self):
-        # TODO: make game go faster as time goes one
-        # TODO: add keyboard interrupt to allow for player movement
-        if self.board.iterate(self.stdscr):
-            self.timer = Timer(self.wait_time, self.loop)
+    def loop(self, wait_time = None, action = None):
+        # TODO: make game go faster as time goes on
+        if not self.terminating and self.board.iterate(action):
+            if self.timer: self.timer.cancel()
+            if wait_time is None:
+                wait_time = Game.default_wait_time
+            self.timer = Timer(wait_time, self.loop)
             self.timer.start()
-            self.iterations += 1
+            self.times_spun += 1
             self.draw()
             self.stdscr.refresh()
-        else:
-            self.terminating = True
+            if not self.is_spinning:
+                self.spinning_wait_time = self.default_wait_time
+                self.times_spun = 0
 
     def draw(self):
         for row_idx, row in enumerate(self.board.cells):
             for col_idx, col in enumerate(row):
+                char_attr = self.stdscr.inch(row_idx, col_idx*2)
+                # if cs.pair_number(char_attr & 0b1111111100000000) != 0:
+                test = cs.pair_number((char_attr & cs.A_COLOR))
+
+                # block_boundary_x = self.board.block_coord[0] + len(self.board.current_block)
+                # block_boundary_y = self.board.block_coord[1] + len(self.board.current_block)
+                # if (row_idx >= self.board.block_coord[1]
+                #     and row_idx < block_boundary_y
+                #     and col_idx >= self.board.block_coord[0]
+                #     and col_idx < block_boundary_x
+                #     and col):
+                #     self.stdscr.addstr(row_idx, col_idx*2, "·", cs.color_pair(col))
+                #     self.stdscr.addstr(row_idx, col_idx*2 + 1, "·", cs.color_pair(col))        
+                # else:
                 self.stdscr.addstr(row_idx, col_idx*2, "·", cs.color_pair(col))
+                # self.stdscr.addstr(row_idx, col_idx*2, str(test), cs.color_pair(col))
                 self.stdscr.addstr(row_idx, col_idx*2 + 1, "·", cs.color_pair(col))
-    
+
     def teardown(self):
         self.timer.cancel()
-
 
 if __name__ == "__main__":
     game = Game()
     # cs.noecho() # Don't write the character typed
     # cs.cbreak() # non-buffered input, react to input immediately
-    # self.stdscr.keypad(True) # have arrow keys return curses values i.e. curses.KEY_LEFT
+    # self.stdscr.keypad(True) # have arrow keys return curses values i.e. curses.KEY_cs.KEY_LEFT
     cs.wrapper(Game.run, game)
-    # Game.run(None, game)
-    #print("exited")
